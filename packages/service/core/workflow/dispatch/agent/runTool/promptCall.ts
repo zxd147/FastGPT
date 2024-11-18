@@ -59,6 +59,7 @@ export const runToolWithPromptCall = async (
   } = workflowProps;
 
   if (interactiveEntryToolParams) {
+    console.debug(`交互式工具调用...`);
     initToolNodes(runtimeNodes, interactiveEntryToolParams.entryNodeIds);
     initToolCallEdges(runtimeEdges, interactiveEntryToolParams.entryNodeIds);
 
@@ -90,6 +91,7 @@ export const runToolWithPromptCall = async (
     // Rewrite toolCall messages
     const concatMessages = [...messages.slice(0, -1), ...interactiveEntryToolParams.memoryMessages];
     const lastMessage = concatMessages[concatMessages.length - 1];
+    console.debug(`LLMRequest: ${lastMessage.content}`);
     lastMessage.content = workflowInteractiveResponseItem
       ? lastMessage.content
       : replaceVariable(lastMessage.content, {
@@ -124,6 +126,7 @@ export const runToolWithPromptCall = async (
       };
     }
 
+    console.debug(`return runToolWithPromptCall again, 1`);
     return runToolWithPromptCall(
       {
         ...props,
@@ -177,6 +180,7 @@ export const runToolWithPromptCall = async (
   );
 
   const lastMessage = messages[messages.length - 1];
+  console.debug(`LLMRequest: ${lastMessage.content}`);
   if (typeof lastMessage.content === 'string') {
     lastMessage.content = replaceVariable(lastMessage.content, {
       toolsPrompt
@@ -252,24 +256,25 @@ export const runToolWithPromptCall = async (
     }
   })();
 
-  const { answer: replaceAnswer, toolJson } = parseAnswer(answer);
+  const { answer: replaceAnswer, toolJson, msg } = parseAnswer(answer);
   // No tools
   if (!toolJson) {
-    if (replaceAnswer === ERROR_TEXT) {
+    console.log(`Not toolJson, FinalResponse: ${replaceAnswer}`);
+    if (replaceAnswer === ERROR_TEXT && msg) {
       workflowStreamResponse?.({
         event: SseResponseEventEnum.answer,
         data: textAdaptGptResponse({
-          text: replaceAnswer
+        text: replaceAnswer
         })
       });
     }
 
-    // 不支持 stream 模式的模型的流失响应
+    // 不支持 stream 模式的模型的流式响应
     if (stream && !isStreamResponse) {
       workflowStreamResponse?.({
         event: SseResponseEventEnum.fastAnswer,
         data: textAdaptGptResponse({
-          text: replaceAnswer
+        text: replaceAnswer
         })
       });
     }
@@ -307,7 +312,9 @@ export const runToolWithPromptCall = async (
     const startParams = (() => {
       try {
         return json5.parse(toolJson.arguments);
+        console.log(`ToolCall, Arguments parsed successfully: `, parsedArguments);
       } catch (error) {
+        console.error(`ToolCall, Failed to parse arguments: `, (error as Error).message);
         return {};
       }
     })();
@@ -327,6 +334,7 @@ export const runToolWithPromptCall = async (
       }
     });
 
+    console.debug('非交互式工具调用...');
     initToolNodes(runtimeNodes, [toolNode.nodeId], startParams);
     const toolResponse = await dispatchWorkFlow({
       ...workflowProps,
@@ -334,6 +342,7 @@ export const runToolWithPromptCall = async (
     });
 
     const stringToolResponse = formatToolResponse(toolResponse.toolResponses);
+    console.log(`Tool call success!`);
 
     workflowStreamResponse?.({
       event: SseResponseEventEnum.toolResponse,
@@ -432,6 +441,7 @@ ANSWER: `;
 
   const runTimes = (response?.runTimes || 0) + toolsRunResponse.toolResponse.runTimes;
   const toolNodeTokens = response?.toolNodeTokens ? response.toolNodeTokens + tokens : tokens;
+  console.log(`Tool runTimes: ${runTimes}`);
 
   // Check stop signal
   const hasStopSignal = toolsRunResponse.toolResponse.flowResponses.some((item) => !!item.toolStop);
@@ -462,6 +472,7 @@ ANSWER: `;
     };
   }
 
+  console.debug(`return runToolWithPromptCall again: 2`);
   return runToolWithPromptCall(
     {
       ...props,
@@ -493,15 +504,19 @@ async function streamResponse({
 
   let startResponseWrite = false;
   let textAnswer = '';
+  let text = '';
+  const prefixReg = /^1(:|：|,|，)/;
+  const answerPrefixReg = /^0(:|：|,|，)/;
 
   for await (const part of stream) {
     if (res.closed) {
+      console.warn(`Response closed, aborting stream...`);
       stream.controller?.abort();
       break;
     }
 
     const responseChoice = part.choices?.[0]?.delta;
-    // console.log(responseChoice, '---===');
+    console.log(`responseChoice:`, responseChoice);
 
     if (responseChoice?.content) {
       const content = responseChoice?.content || '';
@@ -512,21 +527,25 @@ async function streamResponse({
           write,
           event: SseResponseEventEnum.answer,
           data: textAdaptGptResponse({
-            text: content
+          text: content
           })
         });
       } else if (textAnswer.length >= 3) {
         textAnswer = textAnswer.trim();
-        if (textAnswer.startsWith('0')) {
+        // 如果还没开始写入响应，检查前缀
+        if (!prefixReg.test(textAnswer) && !answerPrefixReg.test(textAnswer)) {
+          // 如果不符合条件，则将其改为以 '0: ' 开头
+          textAnswer = '0: ' + textAnswer;
+        }
+        if (answerPrefixReg.test(textAnswer)) {
           startResponseWrite = true;
           // find first : index
-          const firstIndex = textAnswer.indexOf(':');
-          textAnswer = textAnswer.substring(firstIndex + 1).trim();
+          text = textAnswer.replace(answerPrefixReg, '').trim();
           workflowStreamResponse?.({
             write,
             event: SseResponseEventEnum.answer,
             data: textAdaptGptResponse({
-              text: textAnswer
+            text: text
             })
           });
         }
@@ -545,17 +564,21 @@ const parseAnswer = (
 ): {
   answer: string;
   toolJson?: FunctionCallCompletion;
+  msg?: string; // 添加 msg
 } => {
   str = str.trim();
-  // 首先，使用正则表达式提取TOOL_ID和TOOL_ARGUMENTS
-  const prefixReg = /^1(:|：)/;
-  const answerPrefixReg = /^0(:|：)/;
+  console.debug(`LLMResponse: ${str}`); // 打印 str 的值
+  const prefixReg = /^1(:|：|,|，)/;
+  const answerPrefixReg = /^0(:|：|,|，)/;
 
+  // 首先，使用正则表达式提取TOOL_ID和TOOL_ARGUMENTS
   if (prefixReg.test(str)) {
+    str = str.replace(prefixReg, '1:').trim();
     const toolString = sliceJsonStr(str);
 
     try {
       const toolCall = json5.parse(toolString);
+      console.debug(`ToolCall: `, toolCall);
       return {
         answer: `1: ${toolString}`,
         toolJson: {
@@ -565,13 +588,18 @@ const parseAnswer = (
         }
       };
     } catch (error) {
+      console.error(`ToolCallError: ${str}`);
       return {
-        answer: ERROR_TEXT
+        answer: str,
+        msg: ERROR_TEXT // 返回
       };
     }
   } else {
+    if (answerPrefixReg.test(str)) {
+    str = str.replace(answerPrefixReg, '').trim();
+    }
     return {
-      answer: str.replace(answerPrefixReg, '')
+      answer: str
     };
   }
 };
