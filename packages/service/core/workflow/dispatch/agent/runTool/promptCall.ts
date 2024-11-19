@@ -30,7 +30,7 @@ import { toolValueTypeList } from '@fastgpt/global/core/workflow/constants';
 import { WorkflowInteractiveResponseType } from '@fastgpt/global/core/workflow/template/system/interactive/type';
 import { ChatItemValueTypeEnum } from '@fastgpt/global/core/chat/constants';
 import { i18nT } from '../../../../../../web/i18n/utils';
-import { addLog } from '../../../../../common/system/log/';
+import { addLog } from '../../../../../common/system/log';
 
 type FunctionCallCompletion = {
   id: string;
@@ -260,7 +260,7 @@ export const runToolWithPromptCall = async (
   const { answer: replaceAnswer, toolJson, msg } = parseAnswer(answer);
   // No tools
   if (!toolJson) {
-    addLog.log(`Not toolJson, FinalResponse: ${replaceAnswer}`);
+    addLog.info(`Not toolJson, FinalResponse: ${replaceAnswer}`);
     if (replaceAnswer === ERROR_TEXT && msg) {
       workflowStreamResponse?.({
         event: SseResponseEventEnum.answer,
@@ -312,8 +312,9 @@ export const runToolWithPromptCall = async (
     // run tool flow
     const startParams = (() => {
       try {
-        return json5.parse(toolJson.arguments);
-        addLog.log(`ToolCall, Arguments parsed successfully: `, parsedArguments);
+        const parsedArguments = json5.parse(toolJson.arguments);
+        addLog.info(`ToolCall, Arguments parsed successfully: `, parsedArguments);
+        return parsedArguments;
       } catch (error) {
         addLog.error(`ToolCall, Failed to parse arguments: `, (error as Error).message);
         return {};
@@ -343,7 +344,7 @@ export const runToolWithPromptCall = async (
     });
 
     const stringToolResponse = formatToolResponse(toolResponse.toolResponses);
-    addLog.log(`Tool call success!`);
+    addLog.info(`Tool call success!`);
 
     workflowStreamResponse?.({
       event: SseResponseEventEnum.toolResponse,
@@ -442,7 +443,7 @@ ANSWER: `;
 
   const runTimes = (response?.runTimes || 0) + toolsRunResponse.toolResponse.runTimes;
   const toolNodeTokens = response?.toolNodeTokens ? response.toolNodeTokens + tokens : tokens;
-  addLog.log(`Tool runTimes: ${runTimes}`);
+  addLog.info(`Tool runTimes: ${runTimes}`);
 
   // Check stop signal
   const hasStopSignal = toolsRunResponse.toolResponse.flowResponses.some((item) => !!item.toolStop);
@@ -505,7 +506,6 @@ async function streamResponse({
 
   let startResponseWrite = false;
   let textAnswer = '';
-  let text = '';
   const prefixReg = /^1(:|：|,|，)/;
   const answerPrefixReg = /^0(:|：|,|，)/;
 
@@ -517,7 +517,7 @@ async function streamResponse({
     }
 
     const responseChoice = part.choices?.[0]?.delta;
-    addLog.log(`responseChoice:`, responseChoice);
+    addLog.info(`responseChoice:`, responseChoice);
 
     if (responseChoice?.content) {
       const content = responseChoice?.content || '';
@@ -541,7 +541,7 @@ async function streamResponse({
         if (answerPrefixReg.test(textAnswer)) {
           startResponseWrite = true;
           // find first : index
-          text = textAnswer.replace(answerPrefixReg, '').trim();
+          const text = textAnswer.replace(answerPrefixReg, '').trim();
           workflowStreamResponse?.({
             write,
             event: SseResponseEventEnum.answer,

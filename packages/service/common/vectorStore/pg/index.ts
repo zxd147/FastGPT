@@ -176,7 +176,10 @@ class PgClass {
       const time = Date.now() - start;
 
       if (time > 300) {
-        addLog.warn(`pg query time: ${time}ms, sql: ${sql}`);
+        // addLog.warn(`pg query time: ${time}ms > 300ms, sql: ${sql}`);
+        const maxLength = 50; // 要显示的最大字符数
+        const truncatedSql = sql.length > maxLength ? sql.slice(0, maxLength) + '...' : sql;
+        addLog.warn(`pg query time: ${time}ms > 300ms, sql: ${truncatedSql}`);
       }
 
       return res;
