@@ -25,7 +25,7 @@ export const countGptMessagesTokens = async (
       number
     >({
       name: WorkerNameEnum.countGptMessagesTokens,
-      maxReservedThreads: global.systemEnv?.tokenWorkers || 50
+      maxReservedThreads: global.systemEnv?.tokenWorkers || 30
     });
 
     const total = await workerController.run({ messages, tools, functionCall });
@@ -33,12 +33,20 @@ export const countGptMessagesTokens = async (
     return total;
   } catch (error) {
     addLog.error('Count token error', error);
-    const total = messages.reduce((sum, item) => {
-      if (item.content) {
-        return sum + item.content.length * 0.5;
-      }
-      return sum;
-    }, 0);
+    // const total = messages.reduce((sum, item) => {
+    //   if (item.content) {
+    //     return sum + item.content.length * 0.5;
+    //   }
+    //   return sum;
+    // }, 0);
+    const total = Array.isArray(messages)
+      ? messages.reduce((sum, item) => {
+          if (item && typeof item.content === 'string') {
+            return sum + item.content.length * 0.5;
+          }
+          return sum;
+        }, 0)
+      : 0;
     return total;
   }
 };
